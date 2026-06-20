@@ -11,12 +11,50 @@ BASE_DIR = pathlib.Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=True)
 
 HF_TOKEN = os.getenv("HF_TOKEN")
+
+
+def _save_token_to_env(token: str):
+    """Save or update HF_TOKEN in the .env file and envvars."""
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        content = env_path.read_text()
+        lines = content.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("HF_TOKEN="):
+                lines[i] = f"HF_TOKEN={token}"
+                break
+        else:
+            lines.append(f"HF_TOKEN={token}")
+        env_path.write_text("\n".join(lines) + "\n")
+    else:
+        env_path.write_text(f"HF_TOKEN={token}\n")
+
+    os.environ["HF_TOKEN"] = token
+
+
+# If there's no token, prompt the user to paste one (Streamlit UI)
 if not HF_TOKEN:
-    st.error("HF_TOKEN missing. Create a .env file in project root and set HF_TOKEN.")
+    st.warning("HF_TOKEN missing. Paste a Hugging Face token below to continue.")
+    _token_input = st.text_input("Hugging Face token", type="password", key="hf_token_input")
+    if st.button("Save token"):
+        if not _token_input:
+            st.error("Please enter a token before saving.")
+        else:
+            _save_token_to_env(_token_input)
+            st.success("Token saved. Reloading app...")
+            st.experimental_rerun()
+
+# Ensure HF_TOKEN is present in envvars after possible save
+HF_TOKEN = os.getenv("HF_TOKEN")
+if not HF_TOKEN:
     st.stop()
 
 os.environ["HF_TOKEN"] = HF_TOKEN
-client = InferenceClient(token=HF_TOKEN)
+try:
+    client = InferenceClient(token=HF_TOKEN)
+except Exception as e:
+    st.error(f"Failed to initialize Hugging Face client: {e}")
+    st.stop()
 # ----------------------------
 # Function to Extract Text
 # ----------------------------
@@ -46,10 +84,23 @@ def get_ai_response(prompt, max_tokens=800):
         )
         return response.choices[0].message.content
     except Exception as e:
+        err = str(e)
         st.error(
             "The AI request failed. This is usually caused by an expired or invalid Hugging Face token. "
-            f"Details: {e}"
+            f"Details: {err}"
         )
+
+        if "401" in err or "Unauthorized" in err or "expired" in err.lower():
+            st.warning("Your Hugging Face token may be invalid or expired. Paste a new token below to update.")
+            _new_token = st.text_input("New Hugging Face token", type="password", key="hf_token_retry")
+            if st.button("Save token", key="save_hf_token_retry"):
+                if _new_token:
+                    _save_token_to_env(_new_token)
+                    st.success("Token updated. Reloading app...")
+                    st.experimental_rerun()
+                else:
+                    st.error("Please enter a token before saving.")
+
         return None
 
 # Streamlit Config
